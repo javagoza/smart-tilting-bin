@@ -29,11 +29,12 @@ driver (or who want direct access to the FIFO and the activity/inactivity engine
 7. [Driver reference](#driver-reference)
 8. [Register map](#register-map)
 9. [Usage examples](#usage-examples)
-10. [Choosing ODR, bandwidth and bus](#choosing-odr-bandwidth-and-bus)
-11. [Testing](#testing)
-12. [Troubleshooting](#troubleshooting)
-13. [Known limitations](#known-limitations)
-14. [Credits and licence](#credits-and-licence)
+10. [Interrupts (INT1 / INT2)](#interrupts-int1--int2)
+11. [Choosing ODR, bandwidth and bus](#choosing-odr-bandwidth-and-bus)
+12. [Testing](#testing)
+13. [Troubleshooting](#troubleshooting)
+14. [Known limitations](#known-limitations)
+15. [Credits and licence](#credits-and-licence)
 
 ---
 
@@ -48,7 +49,8 @@ driver (or who want direct access to the FIFO and the activity/inactivity engine
   all single-, dual- and three-axis formats, with chunked burst reads.
 - Hardware activity / activity2 / inactivity detection: thresholds, timers
   (with the ODR-dependent scaling) and activity processing mode.
-- INT1/INT2 event mapping and decoded status registers.
+- INT1/INT2 event mapping and decoded status registers, with ready-to-use patterns
+  for waiting on the interrupt pins instead of polling (see [Interrupts](#interrupts-int1--int2)).
 - Unit tests that run without hardware.
 
 ---
@@ -97,7 +99,8 @@ Per the board's user guide (UG-1113) and schematic:
 | P2-1 / P1-3 GND | GND |
 | P1-1 VS | 3.3 V (see supply note) |
 | P1-2 VDDIO | 3.3 V, so the logic levels match the Pi |
-| P1-5 INT1 / P1-4 INT2 | Optional, any free GPIO (not used by this driver yet; ADI's Linux overlay example uses GPIO25) |
+| P1-5 INT1 | Optional: GPIO25 (pin 22), the GPIO used in ADI's Linux overlay example. See [Interrupts](#interrupts-int1--int2) |
+| P1-4 INT2 | Optional: GPIO24 (pin 18), or any free GPIO |
 
 **Supply note.** Check the allowed ranges of `VS` and `VDDIO` in the ADXL372
 data sheet before powering the board; the Pi's 3.3 V rail is the natural choice
@@ -428,13 +431,175 @@ while True:
         print("inactivity")
 ```
 
-With the INT pins wired to GPIOs you can wait for edges with `libgpiod` instead of polling.
+To sleep until the event instead of polling `get_status()`, wire INT1/INT2 to GPIOs and
+follow [Interrupts](#interrupts-int1--int2).
 
 ### Offline analysis
 
 `demo.py stream --record shock.csv` writes `t, x_g, y_g, z_g`. Timestamps within
 one FIFO read are back-computed from the ODR; the sensor's own sample clock is
 the reference for spacing.
+
+---
+
+## Interrupts (INT1 / INT2)
+
+The ADXL372 has two independent interrupt outputs. On the EVAL-ADXL372Z they are
+brought straight to header P1 (**INT1 = P1-5**, **INT2 = P1-4**); the schematic
+shows no resistors or other components on these lines. Each pin has its own
+mapping register (`INT1_MAP` `0x3B`, `INT2_MAP` `0x3C`), configured with
+`set_interrupts()`. Any combination of sources can be mapped to either pin.
+
+### Event sources
+
+| Name | Intended use | Notes |
+|------|--------------|-------|
+| `act` | Activity detected (acceleration above the activity threshold) | Wake the application on a shock or movement |
+| `inact` | Inactivity detected (below the inactivity threshold for the inactivity time) | Go back to idle |
+| `fifo_full` | FIFO has reached the configured watermark | The source ADI's Linux driver uses for buffered streaming |
+| `fifo_ovr` | FIFO overrun | Data-loss alarm |
+| `data_rdy` | New sample available | Impractical in Python at high ODRs, use the FIFO instead |
+| `fifo_rdy`, `awake`, `low` | See the data sheet | Not used by the examples below |
+
+`act`, `inact` and the FIFO events are also visible as flags in `get_status()`
+(`st.act`, `st.inact`, `st.fifo_full`, `st.fifo_overrun`, `st.fifo_entries`).
+
+### Electrical behaviour: verify before relying on it
+
+ADI's Linux driver requests the interrupt with a **rising edge**, which suggests
+active-high outputs. ADI's device-tree example, however, carries a falling-edge
+flag, and the two do not agree. Check the polarity on your board with a scope or
+`gpiomon` before choosing the edge in software. The data sheet is the reference for
+the output drive type and for what exactly clears each flag; ADI's Linux handler
+reads the status registers on every interrupt, and the examples below do the same
+with `get_status()`.
+
+### Wiring
+
+| EVAL-ADXL372Z | Raspberry Pi / CM4 |
+|---------------|--------------------|
+| P1-5 INT1 | GPIO25 (pin 22) |
+| P1-4 INT2 | GPIO24 (pin 18) |
+| P1-3 GND | GND (already connected for the SPI wiring) |
+
+Both pins are 3.3 V logic when `VDDIO` is powered from 3.3 V.
+
+### Waiting for edges from Python
+
+Install the libgpiod Python bindings (API v2):
+
+```bash
+pip install gpiod
+gpiodetect              # shows the GPIO chip name, /dev/gpiochip0 on a CM4
+```
+
+The driver itself only maps the events to the pins. A minimal helper to sleep
+until an edge arrives:
+
+```python
+import gpiod
+from gpiod.line import Edge
+
+class InterruptLine:
+    def __init__(self, pin, chip="/dev/gpiochip0", edge=Edge.RISING):
+        self.req = gpiod.request_lines(
+            chip, consumer="adxl372",
+            config={pin: gpiod.LineSettings(edge_detection=edge)})
+
+    def wait(self, timeout=None):
+        """Block until an edge arrives (True) or the timeout expires (False)."""
+        if self.req.wait_edge_events(timeout):
+            self.req.read_edge_events()
+            return True
+        return False
+```
+
+Use `Edge.FALLING` if your measurement shows an active-low output.
+
+### Pattern A: wake on a shock (`act`)
+
+```python
+from adxl372 import ADXL372, SPIBus, ActProcMode
+
+dev = ADXL372(SPIBus(), odr_hz=3200, bandwidth_hz=1600)
+dev.init()
+dev.set_activity_threshold("activity", 2000, referenced=True, enable=True)   # 2 g
+dev.set_activity_time_ms(1)
+dev.set_activity_processing(ActProcMode.LOOPED)      # as in ADI's Linux driver
+dev.set_interrupts(int1=("act",))
+dev.start()
+
+irq = InterruptLine(25)                              # INT1
+while True:
+    if irq.wait():                                   # sleeps, no CPU use
+        st = dev.get_status()
+        if st.act:
+            print("shock detected")
+```
+
+### Pattern B: stream with the FIFO watermark (`fifo_full`)
+
+```python
+from adxl372 import FifoMode, FifoFormat, G_PER_LSB
+
+dev.configure_fifo(FifoMode.STREAMED, FifoFormat.XYZ, 300)   # watermark: 100 sample sets
+dev.set_interrupts(int1=("fifo_full",))
+dev.start()
+
+irq = InterruptLine(25)
+while True:
+    irq.wait(timeout=1.0)            # the timeout is a safety net, see below
+    for x, y, z in dev.read_fifo():
+        ...                          # process (x, y, z) * G_PER_LSB
+    if dev.fifo_overrun:
+        print("overrun: the host is too slow for this ODR")
+```
+
+### Pattern C: two pins, two roles
+
+Map the data stream to INT1 and the events to INT2, and wait on both lines:
+
+```python
+dev.set_interrupts(int1=("fifo_full",), int2=("act", "inact"))
+
+req = gpiod.request_lines("/dev/gpiochip0", consumer="adxl372", config={
+    25: gpiod.LineSettings(edge_detection=Edge.RISING),   # INT1
+    24: gpiod.LineSettings(edge_detection=Edge.RISING),   # INT2
+})
+while True:
+    if req.wait_edge_events(1.0):
+        lines = {ev.line_offset for ev in req.read_edge_events()}
+        if 25 in lines:
+            data = dev.read_fifo()
+        if 24 in lines:
+            st = dev.get_status()
+            print("act" if st.act else "inact" if st.inact else "?")
+```
+
+### Order of operations
+
+1. Configure thresholds, timers, FIFO and ODR (the driver puts the chip in standby
+   when needed and restores the mode).
+2. Map the events with `set_interrupts()`.
+3. Call `start()`.
+4. Request the GPIO line and wait for edges.
+5. After every edge, call `get_status()` (and `read_fifo()` for the FIFO).
+
+### Precautions
+
+- **Always use a timeout** when the line can stay asserted. Edges only mark
+  changes: if the condition persists, no new edge arrives. With a timeout you can
+  re-read the status periodically and recover.
+- **`read_fifo()` leaves one sample set behind** by default, so the FIFO is never
+  completely empty after a read; its level may stay at or near the watermark
+  between wake-ups.
+- **Latency is not deterministic.** Python plus the Linux scheduler add from
+  hundreds of microseconds to several milliseconds. This is fine for waking up
+  and draining the FIFO, but do not use the edge time as the timestamp of a shock:
+  use the FIFO sample spacing (`1 / odr_hz`) instead.
+- **Do not combine this with ADI's kernel overlay** on the same chip.
+- **Debugging.** `gpiomon` shows edges without any code; its option syntax differs
+  between libgpiod v1 and v2, so check `gpiomon --help`.
 
 ---
 
@@ -473,7 +638,7 @@ They cover:
 - ODR / bandwidth validation and the Nyquist coupling.
 - Restoring the operating mode after configuration changes.
 - Activity threshold and timer encodings, including re-scaling when the ODR changes.
-- Interrupt map bits and status decoding.
+- Interrupt map bits and status decoding (the GPIO wait helper itself needs real hardware).
 - Sign extension of 12-bit samples, `DATA_RDY` timeout, unit conversion.
 - FIFO configuration, drain with and without leaving one set behind, chunked reads
   of a large FIFO, single-axis formats and overrun reporting.
@@ -493,7 +658,10 @@ that it matches the physical device. The I²C transport is exercised only on rea
 | `i2cdetect` shows nothing | The EVAL-ADXL372Z has no I²C pins; this only applies to other boards |
 | `TimeoutError: DATA_RDY never set` | Device still in standby: call `start()` |
 | Values stuck at 0 or ±2047 | Measurement mode not active, saturation (shock above ±200 g), or wiring |
-| FIFO overruns | Poll faster, lower the ODR, use SPI, or raise the I²C speed to 400 kHz |
+| FIFO overruns | Poll faster, lower the ODR, use SPI, or raise the I²C speed to 400 kHz. With interrupts, lower the watermark or the ODR |
+| No interrupt edges arrive | `set_interrupts()` not called before `start()`, event never occurs (check thresholds with `get_status()`), wrong GPIO or chip, INT wire not connected, or the wrong edge (`Edge.FALLING` vs `Edge.RISING`) |
+| Interrupt wakes up constantly or never retriggers | The condition is still asserted: read `get_status()` / drain the FIFO after each event and use a timeout |
+| `gpiod` import or API errors | Install the v2 bindings with `pip install gpiod`; the older v1 API has different function names |
 | `ValueError: bandwidth must not exceed ODR/2` | Choose a bandwidth with an index ≤ the ODR index |
 | Warning about REVID < 3 on I²C | Old silicon revision with an I²C bug; use SPI if other devices share the bus |
 | `ModuleNotFoundError: smbus2 / spidev` | `pip install smbus2` or `pip install spidev` |
@@ -511,7 +679,10 @@ that it matches the physical device. The I²C transport is exercised only on rea
   are not covered here: check the ADXL372 data sheet.
 - **SPI mode 0** is assumed (it is the default used by ADI's Linux driver, which
   does not request another mode).
-- **Polling only.** INT1/INT2 can be mapped, but the driver does not wait on GPIO edges.
+- **Interrupts are mapped, not waited on.** The driver configures INT1/INT2; waiting
+  for edges is left to your code (see [Interrupts](#interrupts-int1--int2)). The edge
+  polarity, output drive type and the exact flag-clearing behaviour were not verified
+  against the data sheet, and the GPIO examples have not been run on real hardware.
 - **Status flag behaviour is not verified.** Whether `act` / `inact` latch until
   read, and how `fifo_rdy` / `fifo_full` relate to the watermark, should be checked
   in the datasheet. The driver therefore relies on `fifo_entries`, not on those flags.
@@ -533,8 +704,8 @@ that it matches the physical device. The I²C transport is exercised only on rea
   ODR and bandwidth, and the "leave one sample set in the FIFO" rule follow ADI's
   Linux IIO driver (`drivers/iio/accel/adxl372*.c`), licensed GPL-2.0+. Only
   behaviour and constants were reused, and the code here is an independent
-  implementation.
+  implementation, but **review licence compatibility before publishing**.
 - ADXL372 and EVAL-ADXL372Z are products of Analog Devices, Inc. This project is
   not affiliated with or endorsed by Analog Devices.
 
-This library is distributed under the GNU General Public License v2.0 or later
+Licence for the code in this repository: **to be defined by the repository owner**.
