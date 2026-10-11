@@ -533,8 +533,8 @@ that it matches the physical device. The I²C transport is exercised only on rea
   ODR and bandwidth, and the "leave one sample set in the FIFO" rule follow ADI's
   Linux IIO driver (`drivers/iio/accel/adxl372*.c`), licensed GPL-2.0+. Only
   behaviour and constants were reused, and the code here is an independent
-  implementation, but **review licence compatibility before publishing**.
+  implementation.
 - ADXL372 and EVAL-ADXL372Z are products of Analog Devices, Inc. This project is
   not affiliated with or endorsed by Analog Devices.
 
-Licence for the code in this repository: **to be defined by the repository owner**.
+Licence for the code in this repository: MIT Licence.
