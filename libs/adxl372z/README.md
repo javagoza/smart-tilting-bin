@@ -537,4 +537,4 @@ that it matches the physical device. The I²C transport is exercised only on rea
 - ADXL372 and EVAL-ADXL372Z are products of Analog Devices, Inc. This project is
   not affiliated with or endorsed by Analog Devices.
 
-Licence for the code in this repository: MIT Licence.
+This library is distributed under the GNU General Public License v2.0 or later
