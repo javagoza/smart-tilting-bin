@@ -566,4 +566,4 @@ The tests prove that the logic is self-consistent, not that your motor follows t
 - GPIO access uses [libgpiod](https://git.kernel.org/pub/scm/libs/libgpiod/libgpiod.git/)
   through its Python bindings (v2).
 
-Licence for the code in this repository: **to be defined by the repository owner**.
+Licence for the code in this repository: MIT Licence.
