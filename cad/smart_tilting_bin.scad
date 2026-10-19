@@ -8,8 +8,10 @@
  *    4 diagonal struts towards the enclosure. There is no disc under the tray,
  *    so objects fall freely into the containers.
  *  - YOKE (rotation): a U-shaped bar fixed to the 28BYJ-48 shaft. It only turns
- *    between 0 and 90 degrees (two microswitches provide homing at those two
- *    positions) and carries the SG90 servo and the tilt axis.
+ *    between 0 and 90 degrees and carries the SG90 servo and the tilt axis.
+ *    Two microswitches provide homing at those two positions: a ramped cam lobe
+ *    on the hub presses their radial buttons at a small radius (16 mm), so the
+ *    stepper needs little torque. Hard stop posts limit the travel.
  *  - BEAM + TRAY (tilt): the horizontal beam is the tilt axis. One end is a
  *    simple pivot, the other is coupled to the SG90 horn (direct drive,
  *    90 degrees of servo travel = +/-45 degrees of tilt).
@@ -17,6 +19,16 @@
  *    refuse falls (perpendicular to the tilt axis). They work as a funnel
  *    towards the container. The ends of the tilt axis keep a solid rim.
  *  - 4 containers at 0/90/180/270 degrees around the axis (translucent ghosts).
+ *  - YOKE STYLES (yoke_style): "wide" has arms outside the tray and the SG90 on the yoke;
+ *    "compact" has a short yoke with arms under the tray (tray above the yoke) and the SG90
+ *    inside the tilting assembly, its shaft fixed to the +x arm. The compact style has a
+ *    shorter beam and roughly a third of the rotating inertia.
+ *    Compact style assembly: (1) centre the servo (1500 us) and slide it into the cradle from the
+ *    open rear, M2 screws through its ears; (2) clamp the cradle on the end of the beam with two
+ *    M3 x 20 bolts; (3) press the horn into the pocket of the +x arm; (4) with the left arm
+ *    removed, insert the beam from the -x side holding the tray level, so the spline enters the
+ *    horn, and fix the horn with its M2 screw through the arm; (5) slide the left arm over the
+ *    pivot pin and screw it to the bar end (2 x M3); (6) bolt the tray and the counterweight.
  *  - COUNTERWEIGHT: a holder under the beam with a sliding steel bar.
  *  - "L" or "arch" SUPPORT (cam_support) for the overhead Logitech C170 camera,
  *    bolted to a diagonal strut of the base. Its front wall (user side) carries
@@ -44,7 +56,10 @@
  */
 
 // ------------------------------------------------------------------ PARAMETERS
-part        = "assembly";   // "assembly","tray","beam","yoke","base","counterweight","camera_support"
+part        = "assembly";   // "assembly","tray","beam","yoke","base","counterweight","camera_support", and for yoke_style="compact": "left_arm","cradle"
+yoke_style  = "wide";       // "wide": tray between wide arms, servo on the yoke (rotating part)
+                            // "compact": short yoke with a central pedestal, tray above it,
+                            //            servo inside the tilting assembly (less inertia on the stepper)
 yaw         = 0;            // [0:90]    tray rotation (28BYJ-48)
 tilt        = 0;            // [-45:45]  tray tilt (SG90)
 animate     = false;        // true: refuse deposition simulation (View > Animate)
@@ -52,6 +67,8 @@ show_bins   = true;         // ghost containers
 show_hw     = true;         // motor, servo, horn, microswitches, sensors
 
 $fn = 90;
+
+compact = (yoke_style == "compact");
 
 // ------------------------------------------------ REFUSE DEPOSITION SIMULATION
 // Container i sits at angle 90*i: 0=+X Packaging, 1=+Y Paper, 2=-X Organic, 3=-Y General waste
@@ -133,12 +150,69 @@ beam_w = 14;
 beam_h = 12;
 
 // Yoke
-AX    = 83;          // inner face of the arms (|x|)
-arm_t = 4;           // arm thickness (= thickness for the SG90 ears)
+// wide   : arms outside the 150 mm tray (|x| = 83); the SG90 hangs on the +x arm.
+// compact: arms under the tray (|x| = 50); the SG90 rides with the tray, its shaft is fixed to the +x arm.
+AX    = compact ? 50 : 83;   // inner face of the arms (|x|)
+arm_t = compact ? 6 : 4;     // arm thickness (wide: = thickness for the SG90 ears; compact: holds the horn pocket)
+beam_x1 = compact ? AX-28.1 : AX-12.8+0.1;   // +x end of the beam (compact: 1 mm before the servo body)
 
-// Microswitches (rotation homing). Angle (on the base) where each one is pressed.
-// Cam mounted at 90 deg at yaw=0 -> switch A at 90 deg (yaw 0), switch B at 180 deg (yaw +90)
-sw_angles = [90, 180];
+// ---------------------------------------------- HOMING: RAMPED CAM + MICROSWITCHES
+// CamdenBoss CSM40500A, button actuator: operating force 1.5 N max, pre-travel 0.8 mm max,
+// over-travel 0.5 mm min, operating position 8.6 +/- 0.4 mm.
+// A single ramped lobe on the yoke hub presses a radial button. The shallow ramp makes the
+// motor torque requirement much lower than a flat finger, and the plateau limits the button
+// depth (no crushing even if the motor keeps stepping). Each switch is mounted on radial
+// slots to tune the operating point by hand (+/-0.4 mm tolerance).
+// Angle (on the base) where each switch is pressed. The lobe is centred at 90 deg in the
+// yoke frame -> switch A at 90 deg (yaw 0), switch B at 180 deg (yaw +90).
+sw_angles  = [90, 180];
+// Switch body from the manufacturer drawing (mm). Tangential axis starts at the terminal-1 end ("left").
+sw_len      = 19.8;              // body length
+sw_h        = 10.6;              // height of the raised part, on the button side
+sw_h2       = 9.5;               // height of the lower part
+sw_raised_l = 10.3;              // length of the raised part from the left end (approx., from the drawing)
+sw_t        = 6.4;               // thickness (z)
+sw_btn_pos  = 7;                 // button axis, measured from the left end
+sw_btn      = 1.5;               // button protrusion above the raised part (the drawing shows ~1.2: check it)
+sw_btn_w    = [2.3, 3.6];        // button size: along the body, along the thickness
+sw_hole_d   = 2.3;               // mounting hole diameter (through the thickness)
+sw_hole_pos = [4.6, 14.1];       // hole centres, measured from the left end (9.5 mm pitch)
+sw_hole_h   = 3.0;               // hole centre height above the terminal face (approx., from the drawing)
+sw_term     = [2.3, 11.1, 18.4]; // solder terminal positions, from the left end
+sw_term_len = 3.6;               // terminal length
+sw_slot     = 3;                 // length of the radial adjustment slots
+r_tip      = 16;                 // radius of the free button tip (a small radius means less torque)
+cam_lift   = 1.1;                // button depth on the plateau: above 0.8 mm (max pre-travel), below 1.3 mm
+cam_gap    = 0.3;                // clearance between the cam base and the free button tip
+cam_ramp   = 15;                 // ramp angle relative to the tangent (deg)
+cam_plat   = 6;                  // plateau length (mm)
+stop_os    = 3;                  // yaw overtravel allowed beyond 0 / 90 deg before the hard stop (deg)
+post_d     = 3.2;                // hard stop post diameter
+r_stop     = 14.8;               // radius of the hard stop posts (between the hub and the button tip)
+
+// Derived cam geometry
+cam_base      = r_tip - cam_gap;
+cam_top       = r_tip + cam_lift;
+cam_ramp_len  = (cam_top - cam_base)/tan(cam_ramp);              // tangential length of each ramp (mm)
+cam_plat_half = (cam_plat/2)/r_tip*180/PI;                       // half plateau angle (deg)
+cam_half      = (cam_plat/2 + cam_ramp_len)/r_tip*180/PI;        // half lobe angle (deg)
+cam_center    = 90;                                              // lobe centre in the yoke frame
+post_half     = (post_d/2)/r_stop*180/PI;
+stop_angles   = [sw_angles[0] - stop_os - cam_half - post_half - 0.5,   // stops the lobe going below yaw 0
+                 sw_angles[1] + stop_os + cam_half + post_half + 0.5];  // stops the lobe going above yaw 90
+// Rough torque needed at the yoke to press the button (N*mm = mN*m), with friction coefficient 0.15
+cam_torque    = 1.5*tan(cam_ramp + atan(0.15))*r_tip;
+
+function cam_r(t) =   // cam radius at angle t (deg) from the lobe centre
+    abs(t) >= cam_half ? cam_base :
+    abs(t) <= cam_plat_half ? cam_top :
+    cam_base + (cam_top-cam_base)*(cam_half-abs(t))/(cam_half-cam_plat_half);
+
+module cam_lobe_2d() {
+    outer = [for (t=[-cam_half:0.5:cam_half]) let(r=cam_r(t), a=cam_center+t) [r*cos(a), r*sin(a)]];
+    inner = [for (t=[cam_half:-1:-cam_half]) let(a=cam_center+t) [10*cos(a), 10*sin(a)]];
+    polygon(concat(outer, inner));
+}
 
 // Radius where the tray opens through the bite (the refuse leaves the tray here).
 // Must come after R, bite_r and bite_off (OpenSCAD evaluates variables in order).
@@ -148,10 +222,12 @@ d_exit = R + bite_off - bite_r - 1;
 // Printed holder under the beam + 15x15 mm steel bar (it slides through a
 // through-cavity and is locked with an M3 grub screw). It balances the tray so
 // the SG90 hardly works at rest.
-cw_len     = 72;     // holder length (X axis)
+cw_len     = compact ? 50 : 72;     // holder length (X axis); shorter in the compact style (the servo takes the +x side)
+cw_cx      = compact ? -13 : 0;     // holder centre along the beam (compact: shifted towards -x)
+cw_bolt    = cw_len/2 - 6;          // the two M3 fixing screws sit at cw_cx +/- cw_bolt
 cw_out     = 24;     // outer section (Y and Z)
 cw_cav     = 16;     // through cavity
-cw_bar_len = 24;     // steel bar length (adjust with a scale; must be < 56)
+cw_bar_len = compact ? 28 : 24;     // steel bar length (adjust with a scale; must be < cw_len - 16)
 rho_pla    = 1.24e-3;   // g/mm3 (approx. PETG/PLA)
 rho_steel  = 7.85e-3;   // g/mm3
 
@@ -163,8 +239,9 @@ z_hub    = beam_h/2 + (hub_h+tray_t)/2;
 mom_tray = m_plate*z_plate + m_hub*z_hub;
 m_holder = (cw_len*cw_out*cw_out - cw_len*cw_cav*cw_cav)*rho_pla;
 z_cw     = beam_h/2 + cw_out/2;
-mom_cw   = (m_holder + 15*15*cw_bar_len*rho_steel)*z_cw;
-bar_ideal = max(0, (mom_tray - m_holder*z_cw)/(z_cw*15*15*rho_steel));
+mom_servo = compact ? 9*5.25 : 0;     // compact: the 9 g servo hangs below the axis and tilts with the tray (g*mm)
+mom_cw   = (m_holder + 15*15*cw_bar_len*rho_steel)*z_cw + mom_servo;
+bar_ideal = max(0, (mom_tray - m_holder*z_cw - mom_servo)/(z_cw*15*15*rho_steel));
 
 // ------------------------------------------- OVERHEAD CAMERA + IR + LED SUPPORT
 // 20x20 profile (2020 aluminium or similar) on a diagonal strut (free of containers).
@@ -236,8 +313,15 @@ module sg90() {
     color("white") cylinder(d=4.8, h=7.7);                              // splined shaft
 }
 
-module microswitch() {   // subminiature SPDT approximation (check the datasheet)
-    color("red") cube([10.2,20,6.4]);
+module microswitch() {   // CSM40500A. Local frame: x radial (outwards), y tangential, z up; y=0 on the button axis. The button faces the hub.
+    r_out = r_tip + sw_btn + sw_h;        // outer face (terminal side)
+    y0    = -sw_btn_pos;                  // left end of the body
+    color("red") {
+        translate([r_out-sw_h,  y0,               0]) cube([sw_h,  sw_raised_l,         sw_t]);   // raised part
+        translate([r_out-sw_h2, y0+sw_raised_l,   0]) cube([sw_h2, sw_len-sw_raised_l,  sw_t]);   // lower part
+    }
+    color("white") translate([r_tip, -sw_btn_w[0]/2, sw_t/2-sw_btn_w[1]/2]) cube([sw_btn+0.1, sw_btn_w[0], sw_btn_w[1]]);   // button
+    color("gold") for (ty=sw_term) translate([r_out, y0+ty-0.3, sw_t/2-1.6]) cube([sw_term_len, 0.6, 3.2]);                   // solder terminals
 }
 
 module shaft_socket(h) { // double-D socket for the 28BYJ-48 shaft (diameter 5, flats 3 mm)
@@ -253,7 +337,11 @@ module base() {
         union() {
             translate([-40,-40,-3]) cube([80,80,3]);                   // motor plate
             for (a=[45:90:315]) rotate(a) translate([30,-5,-6]) cube([140,10,6]);  // struts
+            for (a=stop_angles) rotate(a) translate([r_stop,0,-0.01]) cylinder(d=post_d, h=7, $fn=24);  // hard stops
         }
+        // Radial slots for the microswitch screws (M2): they tune the button depth by hand
+        for (a=sw_angles, hy=sw_hole_pos) rotate(a) hull() for (du=[-sw_slot/2, sw_slot/2])
+            translate([r_tip+sw_btn+sw_h-sw_hole_h+du, hy-sw_btn_pos, -4]) cylinder(d=sw_hole_d+0.3, h=6, $fn=16);
         translate([0,0,-4]) cylinder(d=10, h=6);                       // hole for the collar
         for (x=[-17.5,17.5]) translate([x,-8,-4]) cylinder(d=4.2,h=6,$fn=24);   // M4 motor screws
     }
@@ -262,16 +350,21 @@ module base() {
 // ---------------------------------------------------------------------- YOKE
 module arm(s) {
     x0 = s>0 ? AX : -AX-arm_t;
+    cd = compact ? 26 : 36;                              // diameter of the boss around the tilt axis
     difference() {
         hull() {
             translate([x0,-11,10]) cube([arm_t,22,8]);
-            translate([x0,0,Zt]) rotate([0,90,0]) cylinder(d=36, h=arm_t);
+            translate([x0,0,Zt]) rotate([0,90,0]) cylinder(d=cd, h=arm_t);
         }
-        if (s>0) {   // SG90 window + screws
+        if (s>0 && compact) {   // pocket that holds the (fixed) servo horn + access for its screw
+            translate([AX-0.01,-3.7,Zt-10.3]) cube([4.6,7.4,20.6]);
+            translate([AX-1,0,Zt]) rotate([0,90,0]) cylinder(d=4.2,h=arm_t+2,$fn=24);      // horn screw (M2) access
+        } else if (s>0) {       // SG90 window + screws
             translate([AX-1,-6.5,Zt-17]) cube([arm_t+2,13,23.5]);
             for (z=[Zt+8.5, Zt-19]) translate([AX-1,0,z]) rotate([0,90,0]) cylinder(d=2.2,h=arm_t+2,$fn=20);
-        } else {     // pivot bushing hole
+        } else {                // pivot bushing hole
             translate([x0-1,0,Zt]) rotate([0,90,0]) cylinder(d=6.4,h=arm_t+2);
+            if (compact) for (y=[-6,6]) translate([x0-1,y,14]) rotate([0,90,0]) cylinder(d=3.4,h=arm_t+2,$fn=20);  // M3 to the bar end
         }
     }
 }
@@ -279,36 +372,73 @@ module arm(s) {
 module yoke() {
     difference() {
         union() {
-            translate([0,0,1]) cylinder(d=32, h=17);                           // hub
-            translate([-(AX+arm_t),-11,10]) cube([2*(AX+arm_t),22,8]);         // bottom bar
-            arm(1); arm(-1);
-            rotate(90) translate([14,-3,2]) cube([15.5,6,5]);                  // cam for the microswitches
+            translate([0,0,1]) cylinder(d=24, h=17);                           // hub
+            translate([compact ? -AX : -(AX+arm_t),-11,10]) cube([(AX+arm_t)-(compact ? -AX : -(AX+arm_t)),22,8]);   // bottom bar
+            arm(1);
+            if (!compact) arm(-1);                                             // compact: the left arm is a separate part (arm_left)
+            translate([0,0,1.5]) linear_extrude(height=4) cam_lobe_2d();       // ramped cam for the microswitches
         }
         translate([0,0,0.99]) shaft_socket(7.8);                               // 28BYJ-48 shaft
         translate([0,0,5]) rotate([0,90,0]) cylinder(d=2.9, h=20, $fn=24);     // M3 grub screw
+        if (compact) for (y=[-6,6]) translate([-AX-1,y,14]) rotate([0,90,0]) cylinder(d=2.6,h=13,$fn=20);   // tapped M3 holes for the left arm
     }
 }
+
+// Compact style: removable left arm. After the servo spline is engaged in the horn, it slides over the
+// pivot pin from the -x side and is fixed to the end of the bar with two M3 screws.
+module arm_left() { arm(-1); }
 
 // -------------------------------------------------------- BEAM (tilt axis)
-// Local frame: origin on the tilt axis
-module beam() {
-    discx = AX-12.8;   // horn coupling disc: x = 70.2 .. 78.2
+// Compact style only: cradle that carries the SG90 on the tilting side. A plate holds the top
+// 4.3 mm of the servo body (the ears rest on its rear face) and two side rails join it to the beam.
+servo_xt = AX - 4.4;                 // x of the servo top face (shaft towards +x): boss 0.4 mm from the horn, spline fully engaged
+cr_x0 = servo_xt - 4.3;              // rear face of the plate
+cr_x1 = servo_xt - 0.3;              // front face of the plate
+
+// The cradle is a separate part: the servo slides into it from the open rear, then the cradle slides
+// over the end of the beam and is clamped with two M3 x 20 bolts (nuts in hex traps on the -y rail).
+module servo_cradle() {
+    bx = [beam_x1-2.5, beam_x1-11];                               // bolt positions along the beam
     difference() {
         union() {
-            translate([-(AX-3),-beam_w/2,-beam_h/2]) cube([(AX-3)+discx+0.1, beam_w, beam_h]);
-            translate([-(AX+3.5),0,0]) rotate([0,90,0]) cylinder(d=6, h=7);   // pivot
-            translate([discx,0,0]) rotate([0,90,0]) cylinder(d=24, h=8);      // horn disc
+            translate([cr_x0,-11.2,-24]) cube([cr_x1-cr_x0, 22.4, 36]);                                  // plate (z -24 .. +12)
+            for (sy=[-1,1]) translate([beam_x1-14, sy>0 ? 7.2 : -11.2, -5.5]) cube([cr_x0-(beam_x1-14)+0.1, 4, 11]);   // rails
         }
-        translate([AX-4.8-4.5,-3.7,-11]) cube([4.6,7.4,22]);                   // horn pocket
-        translate([discx-1,0,0]) rotate([0,90,0]) cylinder(d=3.2,h=10,$fn=24); // M2/M3 screw
-        for (x=[-15,15]) translate([x,0,-beam_h/2-1]) cylinder(d=2.6,h=beam_h+2,$fn=20); // tray fixing
-        for (x=[-30,30]) translate([x,0,-beam_h/2-1]) cylinder(d=2.6,h=9,$fn=20);          // counterweight fixing (blind)
+        translate([cr_x0-1,-6.5,-16.8]) cube([cr_x1-cr_x0+2, 13, 23.1]);                                // window for the servo body
+        for (z=[8.5,-19]) translate([cr_x0-1,0,z]) rotate([0,90,0]) cylinder(d=1.8,h=4,$fn=16);       // M2 self-tapping screws (blind)
+        for (x=bx) translate([x,-12,0]) rotate([-90,0,0]) cylinder(d=3.4,h=24,$fn=20);                 // M3 bolts across the beam
+        for (x=bx) translate([x,-11.21,0]) rotate([-90,0,0]) cylinder(d=6.4,h=2.7,$fn=6);              // nut traps (-y rail)
     }
 }
 
-module horn() {   // single-arm horn inside its pocket (visual)
+// Local frame: origin on the tilt axis
+module beam() {
+    discx = AX-12.8;   // wide style: horn coupling disc, x = 70.2 .. 78.2
+    difference() {
+        union() {
+            translate([-(AX-3),-beam_w/2,-beam_h/2]) cube([(AX-3)+beam_x1, beam_w, beam_h]);
+            translate([-(AX+3.5),0,0]) rotate([0,90,0]) cylinder(d=6, h=7);   // pivot
+            if (!compact) translate([discx,0,0]) rotate([0,90,0]) cylinder(d=24, h=8);  // horn disc
+        }
+        if (compact) {
+            for (x=[beam_x1-2.5, beam_x1-11]) translate([x,-beam_w/2-1,0]) rotate([-90,0,0]) cylinder(d=3.2,h=beam_w+2,$fn=20);   // cradle bolts
+        } else {
+            translate([AX-4.8-4.5,-3.7,-11]) cube([4.6,7.4,22]);                   // horn pocket
+            translate([discx-1,0,0]) rotate([0,90,0]) cylinder(d=3.2,h=10,$fn=24); // M2/M3 screw
+        }
+        for (x=[-15,15]) translate([x,0,-beam_h/2-1]) cylinder(d=2.6,h=beam_h+2,$fn=20); // tray fixing
+        for (x=[cw_cx-cw_bolt, cw_cx+cw_bolt]) translate([x,0,-beam_h/2-1]) cylinder(d=2.6,h=9,$fn=20);  // counterweight fixing (blind)
+    }
+}
+
+module horn() {   // wide style: single-arm horn inside its pocket in the beam disc (visual)
     color("white") translate([AX-4.8-4.0,0,0]) rotate([0,90,0]) cylinder(d=7, h=3.8);
     color("white") translate([AX-4.8-3.6,-3.4,-10]) cube([3.4,6.8,20]);
+}
+
+module horn_fixed() {   // compact style: the horn is fixed in the pocket of the +x arm (visual)
+    color("white") translate([AX,0,0]) rotate([0,90,0]) cylinder(d=7, h=3.8);
+    color("white") translate([AX,-3.4,-10]) cube([3.4,6.8,20]);
 }
 
 // ------------------------------------------------------------------- TRAY
@@ -339,17 +469,17 @@ module tray() {
 // Maximum swing radius is about 32 mm: it leaves about 10 mm of clearance over the yoke (42 mm below the axis).
 module counterweight() {
     z_top = -beam_h/2;
-    difference() {
+    translate([cw_cx,0,0]) difference() {
         translate([-cw_len/2, -cw_out/2, z_top-cw_out]) cube([cw_len, cw_out, cw_out]);
         translate([-cw_len/2-1, -cw_cav/2, z_top-cw_out/2-cw_cav/2]) cube([cw_len+2, cw_cav, cw_cav]);  // cavity
-        for (x=[-30,30]) translate([x,0,z_top-cw_out-1]) cylinder(d=3.4, h=cw_out+2, $fn=20);            // M3 to the beam
-        for (x=[-15,15]) translate([x,0,z_top-6]) cylinder(d=4, h=8, $fn=20);                           // clearance for the tray screws
+        for (x=[-cw_bolt,cw_bolt]) translate([x,0,z_top-cw_out-1]) cylinder(d=3.4, h=cw_out+2, $fn=20); // M3 to the beam
+        for (x=[-15,15]) translate([x-cw_cx,0,z_top-6]) cylinder(d=4, h=8, $fn=20);                     // clearance for the tray screws
         translate([0,0,z_top-cw_out-1]) cylinder(d=2.6, h=6, $fn=20);                                   // M3 grub screw
     }
 }
 
 module counterweight_bar() {   // 15x15 steel bar (visual)
-    translate([-cw_bar_len/2, -7.5, -beam_h/2-cw_out/2-7.5]) cube([cw_bar_len, 15, 15]);
+    translate([cw_cx-cw_bar_len/2, -7.5, -beam_h/2-cw_out/2-7.5]) cube([cw_bar_len, 15, 15]);
 }
 
 // IR sensor head: the mounting face is at z=0 and the sensor looks towards -z.
@@ -467,16 +597,23 @@ module assembly() {
     if (show_hw) {
         stepper28byj();
         color("black") translate([0,0,0]) cylinder(d=26,h=1);                    // sliding washer
-        for (a=sw_angles) rotate(a) translate([28.5,-10,0]) microswitch();
+        for (a=sw_angles) rotate(a) microswitch();
     }
     rotate([0,0,yaw_e]) {
         color("orange") yoke();
-        if (show_hw) translate([AX-0.3,0,Zt]) rotate([0,-90,0]) rotate([0,0,180]) sg90();
+        if (compact) color("orange") arm_left();
+        if (show_hw && !compact) translate([AX-0.3,0,Zt]) rotate([0,-90,0]) rotate([0,0,180]) sg90();
+        if (show_hw && compact) translate([0,0,Zt]) horn_fixed();
         translate([0,0,Zt]) rotate([tilt_e,0,0]) {
             color("steelblue") beam();
+            if (compact) color("lightsteelblue") servo_cradle();
             color("seagreen") tray();
             color("slategray") counterweight();
-            if (show_hw) { horn(); color("dimgray") counterweight_bar(); }
+            if (show_hw) {
+                if (compact) translate([servo_xt,0,0]) rotate([0,90,0]) sg90();   // the servo tilts with the tray
+                else horn();
+                color("dimgray") counterweight_bar();
+            }
         }
     }
     if (show_cam) camera_support();
@@ -491,11 +628,16 @@ else if (part=="beam")            beam();
 else if (part=="yoke")            yoke();
 else if (part=="base")            base();
 else if (part=="counterweight")   counterweight();
+else if (part=="left_arm")        arm_left();      // compact style only
+else if (part=="cradle")          servo_cradle();  // compact style only
 else if (part=="camera_support")  camera_support();
 
+echo(str("Yoke style: ", yoke_style, " | arms at |x| = ", AX, " mm"));
 echo(str("Tray diameter ", tray_d, " mm | tilt axis at ", Zt, " mm | yaw=", yaw_e, " tilt=", tilt_e));
 echo(str("Balance: tray moment ~ ", round(mom_tray), " g*mm | counterweight ~ ", round(mom_cw),
          " g*mm | balancing bar ~ ", round(bar_ideal*10)/10, " mm (about 10-20 % more makes the tray rest at 0 deg)"));
+echo(str("Homing cam: lobe ", round(2*cam_half*10)/10, " deg wide, ramp ", cam_ramp, " deg, estimated torque to press the switch ~ ",
+         round(cam_torque*10)/10, " mN*m (28BYJ-48 rated >34.3 mN*m at 120 Hz, plus yoke friction)"));
 echo(str("IR sensor: tilt towards the tray ~ ", round(ir_aim*10)/10, " deg"));
 echo(str("Camera: lens at ", round(cam_lens_z), " mm (", round(cam_dist), " mm above the tray, sees a diameter of ", cam_view_d,
          " mm) | total support height ~ ", round(arm_top), " mm | type: ", cam_support));
